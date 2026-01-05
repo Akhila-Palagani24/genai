@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ChatGPT-Style Student Assistant</title>
+
+<style>
+:root{
+  --bg:#0b0f19;
+  --panel:#11172a;
+  --panel-light:#161f34;
+  --text:#ffffff;
+  --soft:#a8b0c7;
+  --accent:#14b8a6;
+  --user-bubble:#7c3aed;
+  --bot-bubble:#2a3553;
+  --border:#1f2940;
+}
+
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family: "Poppins", Arial, sans-serif;
+  overflow:hidden;
+}
+
+.app{
+  display:flex;
+  height:100vh;
+}
+
+/* SIDEBAR */
+.sidebar{
+  width:300px;
+  background:var(--panel);
+  border-right:1px solid var(--border);
+  display:flex;
+  flex-direction:column;
+}
+.logo{
+  padding:20px;
+  font-size:20px;
+  font-weight:700;
+}
+.newChatBtn{
+  margin:10px;
+  background:var(--panel-light);
+  color:white;
+  border-radius:10px;
+  padding:10px;
+  border:1px solid var(--border);
+  cursor:pointer;
+}
+.newChatBtn:hover{background:#1f2940}
+.history{
+  flex:1;
+  overflow-y:auto;
+}
+.conv{padding:12px;border-bottom:1px solid var(--border);cursor:pointer;}
+.conv:hover{background:#1f2940}
+.conv-title{font-size:14px}
+.conv-meta{color:var(--soft);font-size:12px}
+
+/* CHAT */
+.main{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+}
+.header{
+  padding:15px;
+  border-bottom:1px solid var(--border);
+  font-weight:700;
+}
+.chat{
+  flex:1;
+  padding:20px;
+  overflow-y:auto;
+}
+
+.msg{
+  padding:12px;
+  margin:6px 0;
+  border-radius:12px;
+  white-space:pre-wrap;
+}
+.user{
+  background:var(--user-bubble);
+  margin-left:auto;
+  max-width:75%;
+}
+.bot{
+  background:var(--bot-bubble);
+  border:1px solid #3a476c;
+}
+
+/* dynamic bubble width */
+.short{max-width:45%}
+.medium{max-width:65%}
+.long{max-width:80%}
+
+.meta{font-size:10px;color:#9ca3af}
+
+/* HEADINGS */
+.bot h3{
+  margin:6px 0;
+  font-size:15px;
+  color:#8bffea;
+}
+
+/* INPUT */
+.input-area{border-top:1px solid var(--border);padding:10px;}
+form{display:flex;gap:10px;}
+textarea{
+  flex:1;
+  resize:none;
+  padding:10px;
+  border-radius:10px;
+  outline:none;
+  background:var(--panel-light);
+  color:white;
+  border:none;
+}
+button{
+  background:var(--accent);
+  border:none;
+  padding:0 20px;
+  border-radius:10px;
+  font-weight:700;
+  cursor:pointer;
+}
+button:disabled{opacity:.5;cursor:not-allowed}
+
+/* typing dots */
+.typingDots::after{
+  content: '...';
+  animation: dots 1s infinite;
+}
+@keyframes dots{
+  0%{content:' .';}
+  50%{content:' ..';}
+  100%{content:' ...';}
+}
+
+/* MOBILE */
+@media(max-width:900px){.sidebar{width:220px}}
+@media(max-width:700px){.sidebar{display:none}}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+  <div class="sidebar">
+      <div class="logo">🤖 Student Assistant</div>
+      <button class="newChatBtn" onclick="newChat()">+ New Chat</button>
+      <div class="history" id="history"></div>
+  </div>
+
+  <div class="main">
+      <div class="header">Chat</div>
+      <div class="chat" id="chat"></div>
+
+      <div class="input-area">
+          <form id="chatForm">
+              <textarea id="input" rows="1" placeholder="Type your message..."></textarea>
+              <button id="sendBtn">Send</button>
+          </form>
+          <div class="meta" id="typing"></div>
+      </div>
+  </div>
+</div>
+
+<script>
+// GLOBAL
+let conversations = JSON.parse(localStorage.getItem("conversations") || "[]");
+let currentId = null;
+let isSending = false;
+const chat=document.getElementById("chat");
+const history=document.getElementById("history");
+const input=document.getElementById("input");
+const typing=document.getElementById("typing");
+const sendBtn=document.getElementById("sendBtn");
+
+// SAVE
+function save(){localStorage.setItem("conversations", JSON.stringify(conversations));}
+function timestamp(){
+  return new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+}
+
+// SANITIZE + STYLE
+function sanitizeResponse(text){
+  return text
+    .replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/\*\*(.*?)\*\*/g,"<b>$1</b>")
+    .replace(/\*(.*?)\*/g,"<i>$1</i>")
+    .replace(/^\s*[-+*]\s/gm,"• ")
+    .replace(/^\s*\d+\.\s/gm,"• ")
+    .replace(/^\s*#{1,6}\s(.*)$/gm,"<h3>$1</h3>")
+    .replace(/^---$/gm,"")
+    .replace(/\n{3,}/g,"\n\n")
+    .trim();
+}
+
+// AUTO EMOJI
+function addEmojis(text){
+  return text
+    .replace(/Study/gi,"📚 Study")
+    .replace(/Tips/gi,"✨ Tips")
+    .replace(/Focus/gi,"🎯 Focus")
+    .replace(/Important/gi,"⚡ Important");
+}
+
+// RENDER HISTORY
+function renderHistory(){
+  history.innerHTML="";
+  conversations.forEach(c=>{
+    const div=document.createElement("div");
+    div.className="conv";
+    div.onclick=()=>openChat(c.id);
+    div.innerHTML=`<div class="conv-title">${c.title || "New Chat"}</div>
+                   <div class="conv-meta">${c.last || ""}</div>`;
+    history.appendChild(div);
+  });
+}
+
+// STREAMING EFFECT
+async function streamMessage(text, bubble){
+  bubble.innerHTML="";
+  let i=0;
+  while(i<text.length){
+    bubble.innerHTML += text[i];
+    chat.scrollTop=chat.scrollHeight;
+    await new Promise(r=>setTimeout(r,10));
+    i++;
+  }
+}
+
+// RENDER CHAT
+function renderChat(){
+  chat.innerHTML="";
+  const conv=conversations.find(c=>c.id===currentId);
+  if(!conv) return;
+
+  conv.messages.forEach(m=>{
+    const div=document.createElement("div");
+    div.className="msg "+m.role;
+
+    const len=m.text.length;
+    if(len<80) div.classList.add("short");
+    else if(len<250) div.classList.add("medium");
+    else div.classList.add("long");
+
+    div.innerHTML = m.role==="bot"
+      ? m.text.replace(/\n/g,"<br>")
+      : m.text;
+
+    chat.appendChild(div);
+
+    const meta=document.createElement("div");
+    meta.className="meta";
+    meta.innerText = m.role==="user"
+      ? "You • "+m.time
+      : "Assistant • "+m.time;
+    chat.appendChild(meta);
+  });
+
+  chat.scrollTop=chat.scrollHeight;
+}
+
+// NEW CHAT
+function newChat(){
+  const id=Date.now();
+  conversations.push({id,title:"New Chat",last:"",messages:[]});
+  currentId=id;
+  save();
+  renderHistory();
+  renderChat();
+}
+
+// OPEN CHAT
+function openChat(id){
+  currentId=id;
+  renderHistory();
+  renderChat();
+}
+
+// SEND
+document.getElementById("chatForm").addEventListener("submit", async(e)=>{
+  e.preventDefault();
+  if(isSending) return;
+
+  let text=input.value.trim();
+  if(!text) return;
+
+  const conv=conversations.find(c=>c.id===currentId);
+  conv.messages.push({role:"user", text, time:timestamp()});
+  conv.title = conv.title==="New Chat"?text.slice(0,25):conv.title;
+  conv.last=text;
+  save();
+  renderChat();
+
+  input.value="";
+  input.focus();
+  isSending=true;
+  sendBtn.disabled=true;
+
+  typing.innerHTML="Assistant is typing<span class='typingDots'></span>";
+
+  try{
+    const res=await fetch("/chat",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:text})
+    });
+
+    const data=await res.json();
+    let clean=sanitizeResponse(data.reply || "...");
+    clean=addEmojis(clean);
+
+    const bubble=document.createElement("div");
+    bubble.className="msg bot long";
+    chat.appendChild(bubble);
+
+    await streamMessage(clean.replace(/\n/g,"<br>"), bubble);
+
+    conv.messages.push({role:"bot", text:clean, time:timestamp()});
+    conv.last=clean.slice(0,25);
+    save();
+    renderChat();
+
+  }catch{
+    conv.messages.push({role:"bot", text:"⚠️ Connection error.", time:timestamp()});
+    renderChat();
+  }
+
+  typing.innerHTML="";
+  isSending=false;
+  sendBtn.disabled=false;
+});
+
+// ENTER SEND
+input.addEventListener("keydown",e=>{
+  if(e.key==="Enter" && !e.shiftKey){
+    e.preventDefault();
+    document.getElementById("chatForm").requestSubmit();
+  }
+});
+
+// INIT
+if(conversations.length===0) newChat();
+else currentId=conversations[0].id;
+
+renderHistory();
+renderChat();
+</script>
+
+</body>
+</html>
